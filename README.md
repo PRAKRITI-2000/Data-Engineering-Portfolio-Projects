@@ -1,2 +1,4 @@
 # Data-Engineering-Portfolio-Projects
-This repository showcases Data Engineering projects undertaken for client engagements. All datasets and information are fictional, replicating real-world business scenarios. These Proofs of Concept (PoCs) demonstrate the technical solutions, engineering approaches, and workflows developed to address client requirements.
+This repository showcases a selection of prominent Data Engineering projects undertaken as part of my client engagements. The datasets and information used in these projects are fictional and have been designed to closely replicate real-world business scenarios and project requirements.
+
+These implementations have been developed as **Proofs of Concept (PoCs)** to demonstrate the technical solutions, engineering approaches, and workflows applied to client requirements, while providing a portfolio-ready representation of the work undertaken.
