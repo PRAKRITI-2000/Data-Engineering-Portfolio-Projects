@@ -5,17 +5,18 @@ from pyspark import pipelines as dp
 from pyspark.sql import SparkSession
 spark=SparkSession.builder.appName("MediCore Health").getOrCreate()
 
-### Reading the static dataframe that contaisn the information of the zip codes
-zip_code_df= spark.read.format("csv").option("inferSchema","false").load("/Volumes/medicore_health_catalog/staging/zip_code_data/")
+### Reading the static dataframe that contains the information of the zip codes.Handle missing Zip codes gracefully ("Unknown").
+zip_code_df= spark.read.format("csv").option("inferSchema","false").option("header","true").load("/Volumes/medicore_health_catalog/staging/zip_code_data/")
 zip_code_df= zip_code_df.select(f.col("ZipCode").astype("string"),f.col("County").astype("string"),f.col("State").astype("string"))
 zip_code_df= zip_code_df.withColumn("ZipCode",f.when(f.col("ZipCode").isNull(),f.lit("Unknown")).otherwise(f.col("ZipCode")))
+zip_code_df=zip_code_df.withColumn("County",f.coalesce(f.col("County"),f.lit("Unknown")))
+zip_code_df=zip_code_df.withColumn("State",f.coalesce(f.col("State"),f.lit("Unknown")))
 
 ### Building the ingestion code with the following requiements specified by the client.
 @dp.table(name="resillient_bronze_ingestion",comment="Here we are ingesting our data based on the requirements specified in the above mentioned pointers")
 
 def resillient_bronze_ingestion():
-    df=spark.readStream.format("cloudFiles").option("cloudFiles.format","csv").option("cloudFiles.schemaLocation","/Volumes/medicore_health_catalog/staging/raw_data_schema_location").option("cloudFiles.inferColumnTypes","false").option("header","true").option("cloudFiles.schemaEvolutionMode","addNewColumns").option("cloudFiles.rescuedDataColumn","_rescuedDataColumn").load("/Volumes/medicore_health_catalog/staging/raw_data/").withColumn("ingestion_timestamp",f.current_timestamp()).withColumn("file_name",f.input_file_name())
-    
+    df=spark.readStream.format("cloudFiles").option("cloudFiles.format","csv").option("cloudFiles.schemaLocation","/Volumes/medicore_health_catalog/staging/raw_data_schema_location").option("cloudFiles.inferColumnTypes","false").option("header","true").option("cloudFiles.schemaEvolutionMode","addNewColumns").option("cloudFiles.rescuedDataColumn","_rescuedDataColumn").load("/Volumes/medicore_health_catalog/staging/raw_data/").withColumn("ingestion_timestamp",f.current_timestamp()).withColumn("input_source_file",f.input_file_name())
     df= df.withColumn("HospitalID",f.col("HospitalID").try_cast("integer"))
     df=df.withColumn("LastVisitDate",f.col("LastVisitDate").try_cast("date"))
     input_rows_count= df.count()
@@ -47,7 +48,7 @@ def silver_transactions_table():
     good_records= df1.filter((f.col("HospitalID").isNotNull())&(f.col("_rescuedDataColumn").isNull()))
     good_records=good_records.withColumn("Sensitive_PII",f.sha2(f.concat(f.col("SSN"),f.lit(salt_key)),256))
     good_records= good_records.drop(f.col("SSN"))
-    good_records= good_records.select(f.trim(f.col("HospitalID")).astype("int"),f.trim(f.col("Name")).astype("string"),f.trim(f.col("Sensitive_PII")).astype("string"),f.trim(f.col("Address")).astype("string"),f.trim(f.col("Phone")).astype("string"),f.trim(f.col("Age")).astype("int"),f.col("LastVisitDate").astype("date"),f.trim(f.col("ZipCode")).astype("string"))
+    good_records= good_records.select(f.trim(f.col("HospitalID")).astype("int").alias("HospitalID"),f.trim(f.col("Name")).astype("string").alias("Name"),f.trim(f.col("Sensitive_PII")).astype("string").alias("Sensitive_PII"),f.trim(f.col("Address")).astype("string").alias("Address"),f.trim(f.col("Phone")).astype("string").alias("Phone"),f.trim(f.col("Age")).astype("int").alias("Age"),f.col("LastVisitDate").astype("date").alias("LastVisitDate"),f.trim(f.col("ZipCode")).astype("string").alias("ZipCode"))
     good_records=good_records.filter((f.col("Age") > 0)&(f.col("Name").isNotNull()))
     good_records=good_records.withColumn("ZipCode",f.when(f.col("ZipCode").isNull(),f.lit("Unknown")).otherwise(f.col("ZipCode")))
     good_records=leak_protection(good_records)
@@ -80,7 +81,9 @@ def silver_transactions_updates():
     return final_df
 
 ### Valid rows go to Silver; Invalid rows (Age < 0 OR Name IS NULL)  go to a Quarantine table.
-def silver_quarantine_table():
+@dp.table(name="silver_quarantine_table",comment="Here we are quarantining the records thatare considered fauly based on the requirements provided")
+
+    def silver_quarantine_table():
     df=spark.readStream.table("silver_transactions_table").option("readChangeFeed", "true")
     quarantine_df= df.filter((f.col("Age") <= 0)|(f.col("Name").isNull()))
     quarantine_df = quarantine_df.withColumn("Violation_Reason",f.when((f.col("Age") <= 0) & (f.col("Name").isNull()),f.lit("Negative_Age & Name Null")).when(f.col("Age") <= 0,f.lit("Negative Age")).when(f.col("Name").isNull(),f.lit("Name Null")).otherwise(f.lit("Unknown Violation")))
