@@ -131,5 +131,5 @@ def conrols_totals():
     good_data_ct=spark.readStream.table("silver_final_transactions_table").agg(f.count("*").alias("total_good_records"))
     quarantined_data_ct=spark.readStream.table("silver_quarantine_table").agg(f.count("*").alias("total_bad_records"))
     final_df= input_data_ct.crossJoin(good_data_ct).crossJoin( quarantined_data_ct)
-    final_df=final_df.withColumn("reconcillation_column",f.when(f.col("total_records_count")!=f.col("input_data_count"),"Mistmatched").otherwise("Matched"))
+    final_df=final_df.withColumn("reconcillation_column",f.when(f.col("total_input_records")!=(f.col("total_good_records")+f.col("total_bad_records"))),"Mistmatched").otherwise("Matched")
     return final_df
