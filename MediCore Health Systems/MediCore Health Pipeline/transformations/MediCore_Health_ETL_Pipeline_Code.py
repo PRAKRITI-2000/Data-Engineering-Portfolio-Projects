@@ -33,6 +33,15 @@ def resillient_bronze_ingestion():
     df=df.withColumn("input_source_file",f.input_file_name())
     return df
 
+### After successful processing, source files must be programmatically moved from Landing to Processed/YYYYMMDD paths. Here we are assuming that all the incoming files have unique names.
+@dp.table(name="source_audit_table",comment="After successfull completion of the data reading from source, the source files have to be moved from the landing to the processed layer")
+def source_audit_table():
+    df=spark.readStream.table("resillient_bronze_ingestion")
+    audit_df= df.select(f.col("input_source_file").alias("input_file_name")).distinct()
+    audit_df= audit_df.withColumn("date_col",f.date_format(f.current_date(),"yyyy-MM-dd"))
+    audit_df=audit_df.withColumn("processed_path",f.concat(f.lit("/Volumes/medicore_health_catalog/staging/processed_audit/"),f.lit("/"),f.lit(f.col("input_source_file"),f.lit("/"),f.lit(f.col("date_col")))))
+    return audit_df
+
 ### Defining the leak-protection function and why it shouldn't accept any other column apart from hashed_ssn
 
 def leak_protection(df):
@@ -111,5 +120,19 @@ keys=["PatientID"],sequence_by=struct(col("LastVisitDate"),col("SourceUpdateTime
 dp.create_auto_cdc_flow(target="final_silver_transactions",source="silver_transactions_updates",keys=["PatientID"],sequence_by=struct(col("LastVisitDate"),col("SourceUpdateTimestamp")),stored_as_scd_type=1,track_history_column_list=["Phone"])
 
 ### Output a "Control Totals" dataframe: Count(Input Rows) vs. Count(Written Rows) +  Count(Quarantined Rows).
-data=[(input_rows_count,written_rows,quarantine_df_count)]
-reconcillation_df=spark.createDataFrame(data,["Input_Rows","Written_Rows","Quarantine_Rows"])
+@dp.table(name="controls_totals",comment="This table keeps track of the records that are passed through every layer of the ETL Pipeline")
+def conrols_totals():
+    input_data=spark.readStream.table("resillient_bronze_ingestion")
+    good_data=spark.readStream.table("silver_final_transactions_table")
+    quarantined_data=spark.readStream.table("silver_quarantine_table")
+
+    input_data_count= input_data.count()
+    good_data_count=good_data.count()
+    quarantined_data_count=quarantined_data.count()
+    total_records_count=good_data+quarantined_data
+
+    data= [(input_data_count,good_data_count,quarantined_data_count,total_records_count)]
+
+    controls= spark.createDataFrame(data,["input_data_count","good_data_count","quarantined_data_count","total_records_count"])
+    controls= controls.withColumn("reconcillation_column",f.when(f.col("total_records_count")!=f.col("input_data_count"),"Mistmatched").otherwise("Matched"))
+    return controls
