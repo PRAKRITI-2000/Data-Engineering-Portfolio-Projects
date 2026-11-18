@@ -90,7 +90,7 @@ def silver_quarantine_table():
     df=spark.readStream.table("refined_resillient_bronze_ingestion")
     quarantine_df= df.filter((f.col("Age") < 0)|(f.col("Name").isNull()))
     quarantine_df = quarantine_df.withColumn("Violation_Reason",f.when((f.col("Age") < 0) & (f.col("Name").isNull()),f.lit("Negative_Age & Name Null")).when(f.col("Age") < 0,f.lit("Negative Age")).when(f.col("Name").isNull(),f.lit("Name Null")).when(f.col("Age").isNull(),f.lit("Age Missing")).otherwise(f.lit("Unknown Violation")))
-    quanratine_df_count=quarantine_df.count()
+    qurantine_df_count=quarantine_df.count()
     return quarantine_df
 
 ### Create a View that explicitly excludes the Hashed_SSN for "General Analytics" users.
@@ -98,7 +98,7 @@ def silver_quarantine_table():
 
 def analytical_view():
     df = spark.read.table("silver_final_transactions_table")
-    df=df.select(f.col("Patient_SK"),f.col("HospitalID"),f.col("Name"),f.col("Address"),f.col("Phone"),f.col("Age"),f.col("LastVisitDate"),f.col("ZipCode"),f.col("ingestion_timestamp"),f.col("input_file_name"))
+    df=df.select(f.col("Patient_SK"),f.col("HospitalID"),f.col("Name"),f.col("Address"),f.col("Phone"),f.col("Age"),f.col("LastVisitDate"),f.col("ZipCode"),f.col("ingestion_timestamp"),f.col("input_source_file"))
     return df
 
 #### Defining the complex business logics on the silver table that is created 
@@ -107,14 +107,14 @@ def analytical_view():
 def silver_transactions_updates():
     df=spark.readStream.table("silver_final_transactions_table").option("readChangeFeed", "true")
     from pyspark.sql.window import Window
-    window_created= Window.partitionBy(f.col("Patient_SK"),f.col("SourceUpdateTimestamp"))
+    window_created= Window.partitionBy(f.col("Patient_SK"),f.col("SourceUpdateTimestamp")).orderBy(f.col(f.col("SourceUpdateTimestamp")))
     df=df.withColumn("rn",row_number().over(window_created))
     df=df.filter(f.col("rn")==1)
     df=df.drop(f.col("rn"))
     ### Join the stream with a static ZipCode reference table to add County and State  columns. Handle missing Zip codes gracefully ("Unknown").
     zip_code_df_req=read_zip_code_reference()
-    final_df= df.alias("a").join(zip_code_df.alias("b"),on=f.col("a.ZipCode")==f.col("b.ZipCode"),how="left").drop(f.col("b.ZipCode"))
-    df=df.withColumn("County", f.coalesce(f.col("County"), f.lit("Unknown"))).withColumn("State",f.coalesce(f.col("State"),f.lit("Unknown")))
+    final_df= df.alias("a").join(zip_code_df_req.alias("b"),on=f.col("a.ZipCode")==f.col("b.ZipCode"),how="left").drop(f.col("b.ZipCode"))
+    final_df=final_df.withColumn("County", f.coalesce(f.col("County"), f.lit("Unknown"))).withColumn("State",f.coalesce(f.col("State"),f.lit("Unknown")))
     return final_df
 
 ### Implement a single MERGE logic that handles SCD Type 2 for Address changes  (History) and SCD Type 1 for Phone changes (Overwrite).Ensure that a record with an older LastVisitDate does not accidentally overwrite a  newer record in the target table.
@@ -134,7 +134,7 @@ def conrols_totals():
     final_df=final_df.withColumn("reconcillation_column",f.when(f.col("total_input_records")!=(f.col("total_good_records")+f.col("total_bad_records"))),"Mistmatched").otherwise("Matched")
     return final_df
 
-#### Implementign the optimization techniques
+#### Implementing the optimization techniques
 
 dbutils.widgets.text("Patient_SK", "")
 FINAL = f"{S}.final_silver_transactions"
@@ -146,7 +146,7 @@ spark.sql(f"OPTIMIZE {FINAL} ZORDER BY (HospitalID) SET TBLPROPERTIES ('pipeline
 
 # R-25: forensic restore (inspect before restoring)
 display(spark.sql(f"DESCRIBE HISTORY {FINAL}"))
-spark.sql(f"RESTORE TABLE {FINAL} TO TIMESTAMP AS OF (current_timestamp() - INTERVAL 5 MINUTES)")
+spark.sql(f"RESTORE TABLE {FINAL} TO TIMESTAMP AS OF {(current_timestamp() - INTERVAL 5 MINUTES)}")
 
 # R-10: right to forget
 pid = dbutils.widgets.get("patient_id")
