@@ -134,7 +134,7 @@ def conrols_totals():
     final_df=final_df.withColumn("reconcillation_column",f.when(f.col("total_input_records")!=(f.col("total_good_records")+f.col("total_bad_records"))),"Mistmatched").otherwise("Matched")
     return final_df
 
-#### Implementing the optimization techniques
+#### Implementing the optimization techniques liek tiem travel, OPTIMIZE and file compaction.
 
 dbutils.widgets.text("Patient_SK", "")
 FINAL = f"{S}.final_silver_transactions"
@@ -143,14 +143,6 @@ FINAL = f"{S}.final_silver_transactions"
 spark.sql(f"ALTER TABLE {FINAL} SET TBLPROPERTIES ('delta.targetFileSize'='128mb')")
 spark.sql(f"OPTIMIZE {FINAL} ZORDER BY (HospitalID) SET TBLPROPERTIES ('pipelines.autoOptimize.zOrderCols = "HospitalID")'))
 
-
-# R-25: forensic restore (inspect before restoring)
 display(spark.sql(f"DESCRIBE HISTORY {FINAL}"))
-spark.sql(f"RESTORE TABLE {FINAL} TO TIMESTAMP AS OF {(current_timestamp() - INTERVAL 5 MINUTES)}")
+spark.sql(f"""RESTORE TABLE {FINAL} TO TIMESTAMP AS OF current_timestamp() - INTERVAL 5 MINUTES""")
 
-# R-10: right to forget
-pid = dbutils.widgets.get("patient_id")
-for t in ["resillient_bronze_ingestion", "silver_transactions_table",
-          "silver_quarantine_table", "final_silver_transactions"]:
-    spark.sql(f"DELETE FROM {S}.{t} WHERE PatientID = :pid", args={"pid": pid})
-    spark.sql(f"VACUUM {S}.{t}")   # default 7-day retention; files are physically removed once they age out  
