@@ -3,7 +3,7 @@ from pyspark.sql import functions as f
 from pyspark.sql.types import*
 from pyspark import pipelines as dp 
 from pyspark.sql import SparkSession
-spark=SparkSession.builder.appName("MediCoreHealth").getOrCreate()
+import datetime
 
 ### Setting up the requirements and creating holders for the data location paths
 zip_code_ref_path="/Volumes/medicore_health_catalog/staging/zip_code_data/"
@@ -20,7 +20,7 @@ def read_zip_code_reference():
     return zip_code_df
 
 # Retrieve the secret from the databricks pipeline configuration and raising an error if the salt key is missing
-salt_key=spark.conf.get("pii.salt_key")
+salt_key=spark.conf.get("pii.salt_key",None)
 if not salt_key:
     raise ValueError("SSN salt key is missing.")   
 
@@ -51,7 +51,7 @@ def leak_protection(df):
     req_columns=[col for col in df.columns if "ssn" in col.lower() and col.lower()!="hashed_ssn"]
     if req_columns:
         raise ValueError(f"The SSN has been leaked" 
-                         f"The leaked SSN details are {req_columns}") 
+                         f"The leaked SSN details are: {req_columns}") 
     return df 
 
 ### Now we are creating a further refined version of the bronze table so that important transformations can be done after ingesting the data in its raw form. Here we are using a temporary view because we dont want this table to persist as a delta table
@@ -61,11 +61,11 @@ def leak_protection(df):
 def refined_resillient_bronze_ingestion():
     df= spark.readStream.table("resillient_bronze_ingestion")
     df=df.withColumn("Patient_SK",f.sha2(f.concat(f.col("HospitalID"),salt_key),256))
-    df=df.withColumn("HospitalID",f.expr("try_cast(`HospitalID`AS INT)"))
-    df=df.withColumn("LastVisitDate",f.expr("try_cast(`LastVisitDate` AS DATE)"))
-    df=df.withColumn("Age",f.expr("try_cast(`Age` AS INT)"))
+    df=df.withColumn("HospitalID",f.expr("try_cast(HospitalID AS INT)"))
+    df=df.withColumn("LastVisitDate",f.expr("try_cast(LastVisitDate AS DATE)"))
+    df=df.withColumn("Age",f.expr("try_cast(Age AS INT)"))
     df=df.withColumn("Name",f.trim(f.col("Name")))
-    df=df.withColumn("Hashed_SSN",f.sha2(f.concat(f.col("SSN"),salt_key),256))
+    df=df.withColumn("Hashed_SSN",f.sha2(f.concat(f.col("SSN"),f.lit("salt_key")),256))
     df=df.drop(f.col("SSN"))
     df=leak_protection(df)
     return df
